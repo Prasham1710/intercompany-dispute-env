@@ -22,7 +22,7 @@ STDOUT FORMAT
 
     [START] task=<task_name> env=<benchmark> model=<model_name>
     [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
-    [END]   success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
+    [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
 
   Rules:
     - One [START] line at episode begin.
@@ -32,63 +32,47 @@ STDOUT FORMAT
     - done and success are lowercase booleans: true or false.
     - error is the raw last_action_error string, or null if none.
     - All fields on a single line with no newlines within a line.
+    - Each tasks should return score in [0, 1]
 
   Example:
     [START] task=click-test env=miniwob model=Qwen3-VL-30B
     [STEP] step=1 action=click('123') reward=0.00 done=false error=null
     [STEP] step=2 action=fill('456','text') reward=0.00 done=false error=null
     [STEP] step=3 action=click('789') reward=1.00 done=true error=null
-    [END] success=true steps=3 rewards=0.00,0.00,1.00
+    [END] success=true steps=3 score=1.00 rewards=0.00,0.00,1.00
 """
 
+import asyncio
 import os
-import re
-import base64
 import textwrap
-from io import BytesIO
-from typing import List, Optional, Dict
+from typing import List, Optional
 
 from openai import OpenAI
-import numpy as np
-from PIL import Image
 
-from browsergym_env import BrowserGymAction, BrowserGymEnv
+from my_env_v4 import MyEnvV4Action, MyEnvV4Env
+IMAGE_NAME = os.getenv("IMAGE_NAME") # If you are using docker image 
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen3-VL-30B-A3B-Instruct:novita"
-LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-TASK_NAME = os.getenv("BROWSERGYM_TASK_NAME", "unknown-task")
-BENCHMARK = os.getenv("BROWSERGYM_BENCHMARK", "unknown-env")
+MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
+TASK_NAME = os.getenv("MY_ENV_V4_TASK", "echo")
+BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "my_env_v4")
 MAX_STEPS = 8
-MAX_DOM_CHARS = 3500
-TEMPERATURE = 0.2
-MAX_TOKENS = 200
-FALLBACK_ACTION = "noop()"
+TEMPERATURE = 0.7
+MAX_TOKENS = 150
+SUCCESS_SCORE_THRESHOLD = 0.1  # normalized score in [0, 1]
 
-DEBUG = True
-ACTION_PREFIX_RE = re.compile(
-    r"^(action|next action)\s*[:\-]\s*",
-    re.IGNORECASE,
-)
-ACTION_PATTERN = re.compile(r"[A-Za-z_]+\s*\(.*\)", re.DOTALL)
-
+# Max possible reward: each token contributes 0.1, across all steps
+_MAX_REWARD_PER_STEP = MAX_TOKENS * 0.1
+MAX_TOTAL_REWARD = MAX_STEPS * _MAX_REWARD_PER_STEP
 
 SYSTEM_PROMPT = textwrap.dedent(
     """
-    You control a web browser through BrowserGym.
-    Reply with exactly one action string.
-    The action must be a valid BrowserGym command such as:
-    - noop()
-    - click('<BID>')
-    - type('selector', 'text to enter')
-    - fill('selector', 'text to enter')
-    - send_keys('Enter')
-    - scroll('down')
-    Use single quotes around string arguments.
-    When clicking, use the BrowserGym element IDs (BIDs) listed in the user message.
-    If you are unsure, respond with noop().
-    Do not include explanations or additional text.
+    You are interacting with a simple echo environment.
+    Each turn you must send a message. The environment will echo it back.
+    Reward is proportional to message length: reward = len(message) * 0.1
+    Your goal is to maximize total reward by sending meaningful, substantive messages.
+    Reply with exactly one message string — no quotes, no prefixes, just the message text.
     """
 ).strip()
 
@@ -106,199 +90,99 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
     )
 
 
-def log_end(success: bool, steps: int, rewards: List[float]) -> None:
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}", flush=True)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
 
 
-def build_history_lines(history: List[str]) -> str:
-    if not history:
-        return "None"
-    return "\n".join(history[-4:])
-
-
-def extract_screenshot_uri(observation) -> Optional[str]:
-    if observation.screenshot is None:
-        return None
-    screen_array = np.array(observation.screenshot, dtype=np.uint8)
-    image = Image.fromarray(screen_array)
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    buffer.seek(0)
-    data_uri = base64.b64encode(buffer.read()).decode("utf-8")
-    return f"data:image/png;base64,{data_uri}"
-
-
-def extract_clickable_elements(observation) -> List[Dict[str, str]]:
-    """Collect BrowserGym element IDs that can be clicked."""
-
-    metadata = getattr(observation, "metadata", {}) or {}
-    obs_dict = metadata.get("browsergym_obs", {}) or {}
-    extra_props = obs_dict.get("extra_element_properties", {}) or {}
-
-    clickables: List[Dict[str, str]] = []
-    for bid, props in extra_props.items():
-        if not props.get("clickable"):
-            continue
-
-        bbox = props.get("bbox") or []
-        bbox_str = ", ".join(bbox) if bbox else "?"
-        clickables.append(
-            {
-                "bid": str(bid),
-                "bbox": bbox_str,
-            }
-        )
-
-    clickables.sort(key=lambda item: item["bid"])
-    return clickables
-
-
-def build_user_prompt(step: int, observation, history: List[str]) -> str:
-    goal = observation.goal or "(not provided)"
-    url = observation.url or "(unknown)"
-    error_note = "Yes" if observation.last_action_error else "No"
-
-    clickables = extract_clickable_elements(observation)
-    if clickables:
-        actions_hint = "\n".join(
-            f"    - {item['bid']} (bbox: {item['bbox']})" for item in clickables
-        )
-    else:
-        actions_hint = "    (none detected)"
-
-    prompt = textwrap.dedent(
+def build_user_prompt(step: int, last_echoed: str, last_reward: float, history: List[str]) -> str:
+    history_block = "\n".join(history[-4:]) if history else "None"
+    return textwrap.dedent(
         f"""
         Step: {step}
-        Goal: {goal}
-        Current URL: {url}
+        Last echoed message: {last_echoed!r}
+        Last reward: {last_reward:.2f}
         Previous steps:
-        {build_history_lines(history)}
-        Last action error: {error_note}
-        Available clickable element IDs: {actions_hint}
-        Reply with exactly one BrowserGym action string.
+        {history_block}
+        Send your next message.
         """
     ).strip()
-    return prompt
 
 
-def parse_model_action(response_text: str) -> str:
-    if not response_text:
-        return FALLBACK_ACTION
-
-    lines = response_text.splitlines()
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line:
-            continue
-        line = ACTION_PREFIX_RE.sub("", line)
-        match = ACTION_PATTERN.search(line)
-        if match:
-            action = match.group(0).strip()
-            action = re.sub(r"\s+", " ", action)
-            return action
-
-    match = ACTION_PATTERN.search(response_text)
-    if match:
-        action = match.group(0).strip()
-        action = re.sub(r"\s+", " ", action)
-        return action
-
-    return FALLBACK_ACTION
+def get_model_message(client: OpenAI, step: int, last_echoed: str, last_reward: float, history: List[str]) -> str:
+    user_prompt = build_user_prompt(step, last_echoed, last_reward, history)
+    try:
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
+            stream=False,
+        )
+        text = (completion.choices[0].message.content or "").strip()
+        return text if text else "hello"
+    except Exception as exc:
+        print(f"[DEBUG] Model request failed: {exc}", flush=True)
+        return "hello"
 
 
-def main() -> None:
+async def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    env = BrowserGymEnv.from_docker_image(
-        image=LOCAL_IMAGE_NAME,
-        env_vars={
-            "BROWSERGYM_BENCHMARK": BENCHMARK,
-            "BROWSERGYM_TASK_NAME": TASK_NAME,
-        },
-    )
+    env = await MyEnvV4Env.from_docker_image(IMAGE_NAME)
 
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
+    score = 0.0
     success = False
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME or "unknown")
+    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        result = env.reset()
-        observation = result.observation
+        result = await env.reset() # OpenENV.reset()
+        last_echoed = result.observation.echoed_message
+        last_reward = 0.0
 
         for step in range(1, MAX_STEPS + 1):
             if result.done:
                 break
 
-            user_prompt = build_user_prompt(step, observation, history)
-            user_content = [{"type": "text", "text": user_prompt}]
-            screenshot_uri = extract_screenshot_uri(observation)
-            if screenshot_uri:
-                user_content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": screenshot_uri},
-                    }
-                )
+            message = get_model_message(client, step, last_echoed, last_reward, history)
 
-            messages = [
-                {
-                    "role": "system",
-                    "content": [{"type": "text", "text": SYSTEM_PROMPT}],
-                },
-                {
-                    "role": "user",
-                    "content": user_content,
-                },
-            ]
-
-            try:
-                completion = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages,
-                    temperature=TEMPERATURE,
-                    max_tokens=MAX_TOKENS,
-                    stream=False,
-                )
-                response_text = completion.choices[0].message.content or ""
-            except Exception as exc:  # noqa: BLE001
-                response_text = FALLBACK_ACTION
-                if DEBUG:
-                    print(f"[DEBUG] Model request failed: {exc}", flush=True)
-
-            action_str = parse_model_action(response_text)
-            result = env.step(BrowserGymAction(action_str=action_str))
-            observation = result.observation
+            result = await env.step(MyEnvV4Action(message=message))
+            obs = result.observation
 
             reward = result.reward or 0.0
-            error = observation.last_action_error or None
             done = result.done
+            error = None
 
             rewards.append(reward)
             steps_taken = step
+            last_echoed = obs.echoed_message
+            last_reward = reward
 
-            log_step(step=step, action=action_str, reward=reward, done=done, error=error)
+            log_step(step=step, action=message, reward=reward, done=done, error=error)
 
-            history_line = f"Step {step}: {action_str} -> reward {reward:+.2f}"
-            if error:
-                history_line += f" ERROR"
-            history.append(history_line)
+            history.append(f"Step {step}: {message!r} -> reward {reward:+.2f}")
 
             if done:
-                success = reward > 0.0
                 break
 
-        else:
-            # Exhausted MAX_STEPS without done=true
-            success = False
+        score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
+        score = min(max(score, 0.0), 1.0)  # clamp to [0, 1]
+        success = score >= SUCCESS_SCORE_THRESHOLD
 
     finally:
-        env.close()
-        log_end(success=success, steps=steps_taken, rewards=rewards)
+        try:
+            await env.close()
+        except Exception as e:
+            print(f"[DEBUG] env.close() error (container cleanup): {e}", flush=True)
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

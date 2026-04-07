@@ -24,7 +24,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["server*", "domain*", "services*", "graders*", "tasks*"]
+include = ["server*", "domain*", "services*", "graders*", "tasks*", "agent*"]
 
 [dependency-groups]
 dev = [

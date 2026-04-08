@@ -2,10 +2,15 @@
 Inference Script for Intercompany Dispute Environment
 ======================================================
 
-Environment Variables:
-    API_BASE_URL        LLM API endpoint
-    MODEL_NAME          Model identifier
-    HF_TOKEN            API key (also accepts API_KEY or GROQ_API_KEY)
+Environment Variables (mandatory for evaluation):
+    OPENAI_API_KEY      LLM API key — primary variable used by automated evaluation
+    API_BASE_URL        LLM API endpoint (OpenAI-compatible; default: Groq)
+    MODEL_NAME          Model identifier (default: llama-3.3-70b-versatile)
+
+    Also accepted as API key (checked in order after OPENAI_API_KEY):
+    HF_TOKEN            Hackathon-declared API key alias
+    API_KEY             Generic alias
+    GROQ_API_KEY        Groq-specific alias (local development)
 
     IMAGE_NAME          Docker image name → spins up container via Docker
     LOCAL_IMAGE_NAME    Alias for IMAGE_NAME
@@ -53,11 +58,16 @@ from agent import (
 # ---------------------------------------------------------------------------
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
+# API key resolution — checked in priority order:
+#   OPENAI_API_KEY  standard variable used by automated evaluation systems
+#   HF_TOKEN        hackathon-declared mandatory variable
+#   API_KEY         generic alias
+#   GROQ_API_KEY    Groq-specific (local development)
 API_KEY = (
-    os.getenv("HF_TOKEN")
+    os.getenv("OPENAI_API_KEY")
+    or os.getenv("HF_TOKEN")
     or os.getenv("API_KEY")
     or os.getenv("GROQ_API_KEY")
-    or os.getenv("OPENAI_API_KEY")
 )
 MODEL_NAME = os.getenv("MODEL_NAME", "llama-3.3-70b-versatile")
 ENV_NAME = "intercompany_dispute_env"

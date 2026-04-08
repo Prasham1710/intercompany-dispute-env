@@ -47,7 +47,7 @@ Each action returns a `CallToolObservation` with:
 - `reward`: Dense step reward (float)
 - `done`: Episode termination flag
 
-On reset, the observation metadata includes task description, objectives, available document IDs, and an open items preview.
+On reset, the observation includes task description, objectives, available document IDs, and an open items preview.
 
 ## Reward Design
 
@@ -68,46 +68,80 @@ On reset, the observation metadata includes task description, objectives, availa
 | Medium | 15% evidence + 20% FX query + 25% adjustment accuracy + 20% match + 10% elimination + 10% efficiency − penalties |
 | Hard | 10% evidence + 20% legal consultation + 25% liable entity + 20% adjustment accuracy + 15% process order + 10% efficiency − penalties |
 
-## Setup
+## Baseline Inference
+
+The inference script (`inference.py`) uses the **OpenAI-compatible API client** and reads credentials from standard environment variables.
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OPENAI_API_KEY` | **Yes** | — | API key — **primary variable** checked first by the script |
+| `API_BASE_URL` | Yes | `https://api.groq.com/openai/v1` | OpenAI-compatible endpoint. Override with your provider's URL |
+| `MODEL_NAME` | Yes | `llama-3.3-70b-versatile` | Model identifier. Override with your model |
+| `HF_TOKEN` | No | — | Accepted as API key alias if `OPENAI_API_KEY` is not set |
+
+> **For automated evaluation:** Set `OPENAI_API_KEY`, `API_BASE_URL`, and `MODEL_NAME`. The script will use them directly.
+>
+> **For local development with Groq:** Set `GROQ_API_KEY` and leave `API_BASE_URL` at the default (Groq endpoint).
+
+### Running Inference
+
+```bash
+# For automated evaluation (OpenAI-compatible provider)
+export OPENAI_API_KEY="sk-..."
+export API_BASE_URL="https://api.openai.com/v1"   # or your provider's endpoint
+export MODEL_NAME="gpt-4o"                         # or your model
+
+python inference.py
+```
+
+```bash
+# For local development with Groq (free tier)
+export GROQ_API_KEY="gsk_..."
+# API_BASE_URL and MODEL_NAME have Groq-compatible defaults
+
+python inference.py
+```
+
+### Using a `.env` file
+
+The script automatically loads a `.env` file in the project root if present:
+
+```env
+# .env — for local development or evaluation
+OPENAI_API_KEY=sk-...
+API_BASE_URL=https://api.openai.com/v1
+MODEL_NAME=gpt-4o
+```
+
+### Expected Baseline Scores
+
+| Task | Score | Steps | Success |
+|------|-------|-------|---------|
+| `easy_batch_matching` | 0.96 | 11 | ✓ |
+| `medium_fx_variance` | 0.70 | 16 | ✓ |
+| `hard_liability_dispute` | 0.78 | 6 | ✓ |
+
+## Setup (Local Development)
 
 ```bash
 # Install dependencies
 uv sync
 
-# Run locally
+# Run the environment server
 uv run server
 
-# Validate (in another terminal)
+# In a separate terminal — run inference
+export OPENAI_API_KEY="sk-..."
+python inference.py
+
+# Validate OpenEnv spec compliance
 uv run openenv validate --verbose
 
-# Run scripted smoke tests (no LLM needed)
+# Run scripted smoke tests (no LLM required)
 uv run python scripts/smoke_eval.py --all
 ```
-
-## Baseline Inference
-
-Uses Groq API (free tier) with Llama via the OpenAI SDK.
-
-```bash
-export GROQ_API_KEY="gsk_..."
-
-# Run all 3 tasks
-uv run python inference.py
-```
-
-**Configuration:**
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GROQ_API_KEY` | — | Groq API key (required) |
-| `MODEL_NAME` | `llama-3.3-70b-versatile` | Model ID |
-| `API_BASE_URL` | `https://api.groq.com/openai/v1` | API endpoint |
-
-**Expected baseline scores** (with scripted oracle agent):
-| Task | Oracle Score | Expected LLM Range |
-|------|--------------|--------------------|
-| Easy | ~0.96 | 0.30 – 0.80 |
-| Medium | ~0.96 | 0.15 – 0.50 |
-| Hard | ~0.98 | 0.10 – 0.40 |
 
 ## Docker
 
@@ -115,12 +149,30 @@ uv run python inference.py
 # Build
 docker build -t intercompany-dispute-env .
 
-# Run
+# Run the environment server
 docker run -p 8000:8000 intercompany-dispute-env
+
+# Run with API credentials (for inference against the container)
+docker run \
+  -e OPENAI_API_KEY="sk-..." \
+  -e API_BASE_URL="https://api.openai.com/v1" \
+  -e MODEL_NAME="gpt-4o" \
+  -p 8000:8000 \
+  intercompany-dispute-env
 
 # Health check
 curl http://localhost:8000/health
 ```
+
+## API Endpoints
+
+| Endpoint | Protocol | Description |
+|----------|----------|-------------|
+| `GET /health` | HTTP | Health check — returns 200 OK |
+| `POST /reset` | HTTP | Reset episode; body: `{"task_id": "...", "scenario_id": "..."}` |
+| `POST /step` | HTTP | Execute action; body: serialized Action |
+| `GET /state` | HTTP | Fetch current episode state |
+| `WS /env` | WebSocket | Bidirectional streaming (primary interface) |
 
 ## Architecture
 

@@ -21,4 +21,4 @@ jobs:
         run: |
           git config user.email "deploy@github-actions"
           git config user.name "GitHub Actions"
-          git push https://Sahil-Sahu-0301:${HF_TOKEN}@huggingface.co/spaces/Sahil-Sahu-0301/intercompany-dispute-env HEAD:main --force
+          git push https://Prasham1710:${HF_TOKEN}@huggingface.co/spaces/Prasham1710/intercompany-dispute-env HEAD:main --force

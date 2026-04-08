@@ -113,7 +113,7 @@ uv run python inference.py
 
 ```bash
 # Build
-docker build -t intercompany-dispute-env -f server/Dockerfile .
+docker build -t intercompany-dispute-env .
 
 # Run
 docker run -p 8000:8000 intercompany-dispute-env

@@ -19,6 +19,8 @@ COPY . .
 # Install project
 RUN uv sync --frozen --no-dev
 
+# Make the uv venv the default Python so `python inference.py` works
+ENV PATH="/app/.venv/bin:$PATH"
 # Ensure root-level modules (models.py, etc.) are importable
 ENV PYTHONPATH=/app
 

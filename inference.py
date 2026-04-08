@@ -268,9 +268,16 @@ async def run_task(llm_client: OpenAI, task_config: dict, env) -> dict:
                 except Exception:
                     pass
             score = float(terminal_score or 0.0)
-            score = min(max(score, 0.0), 1.0)  # clamp to [0, 1]
+            score = min(max(score, 0.01), 0.99)  # clamp to (0, 1) exclusive
             success = score >= SUCCESS_THRESHOLD
             break
+
+    # If episode ended without done (ran out of steps), derive partial score from rewards
+    if score == 0.0 and rewards:
+        score = min(max(sum(r for r in rewards if r > 0) / max(len(rewards), 1), 0.0), 1.0)
+    # Final clamp: score must be strictly in (0, 1)
+    score = round(min(max(score, 0.01), 0.99), 4)
+    success = score >= SUCCESS_THRESHOLD
 
     log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
     return {

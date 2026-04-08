@@ -691,17 +691,19 @@ class IntercompanyDisputeEnvironment(MCPEnvironment):
         return False
 
     def _compute_terminal_score(self) -> float:
-        """Compute final normalized score [0.0, 1.0].
+        """Compute final normalized score in (0.0, 1.0) exclusive.
 
         Dispatches to the appropriate grader based on task difficulty.
         Falls back to the generic scorer if grader not yet implemented.
+        Clamps result to (0.01, 0.99) so score is strictly between 0 and 1.
         """
         try:
             from graders import get_grader
             grader = get_grader(self._ctx.scenario.difficulty)
-            return grader.score(self._ctx)
+            raw = grader.score(self._ctx)
         except (ImportError, AttributeError, ValueError):
-            return self._generic_score()
+            raw = self._generic_score()
+        return round(max(0.01, min(0.99, raw)), 4)
 
     def _generic_score(self) -> float:
         """Generic fallback terminal scorer used before graders are wired in."""

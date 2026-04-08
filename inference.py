@@ -268,6 +268,7 @@ async def run_task(llm_client: OpenAI, task_config: dict, env) -> dict:
                 except Exception:
                     pass
             score = float(terminal_score or 0.0)
+            score = min(max(score, 0.0), 1.0)  # clamp to [0, 1]
             success = score >= SUCCESS_THRESHOLD
             break
 

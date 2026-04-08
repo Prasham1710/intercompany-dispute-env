@@ -7,8 +7,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files first (cached layer)
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock requirements.txt ./
 COPY openenv.yaml ./
+
+# Install deps with pip too (so bare `python inference.py` works outside venv)
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Install dependencies without project itself (better caching)
 RUN uv sync --frozen --no-dev --no-install-project

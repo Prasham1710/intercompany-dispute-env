@@ -11,13 +11,32 @@ tags:
 
 # Intercompany Dispute Environment
 
-An OpenEnv environment where an AI **Enterprise Consolidation Orchestrator** resolves complex intercompany accounting disputes across a simulated multinational enterprise using Model Context Protocol (MCP) tools.
+An OpenEnv environment where an AI **Enterprise Consolidation Orchestrator** autonomously resolves complex intercompany accounting disputes across a simulated multinational enterprise using Model Context Protocol (MCP) tools.
 
-## Overview
+## The Problem
 
-Intercompany reconciliation costs multinational companies thousands of hours annually. This environment simulates the core challenge: matching transactions across entities, resolving currency discrepancies, and determining legal liability from shipping contracts.
+Every quarter, multinational corporations face the same painful bottleneck: **intercompany reconciliation**. When a parent company and its subsidiaries trade goods, services, or capital across borders, each entity records the transaction independently — often in different currencies, on different dates, and with different descriptions. Before consolidated financial statements can be filed, every single intercompany balance must net to zero. In practice, they rarely do.
 
-The agent must reason across invoices, FX rates, and Incoterms — hallucinating IDs or skipping evidence results in lower scores.
+The mismatches range from trivial (rounding differences) to complex (foreign exchange variances from 30-day payment delays) to adversarial (a subsidiary refuses to recognize a payable because damaged goods shifted legal liability under international shipping terms). Today, teams of accountants spend **thousands of hours per quarter** manually pulling invoices, cross-referencing contracts, consulting legal teams on Incoterms, and posting corrective journal entries — all under tight reporting deadlines.
+
+## Our Approach
+
+This project builds an autonomous AI system that acts as an expert corporate financial controller. A centralized **Orchestrator** agent perceives unbalanced accounts, gathers evidence from invoices and contracts, consults specialized sub-agents for legal and treasury context, and executes mathematically sound journal entries to balance the books — all without human intervention.
+
+The system uses a **Client-Server Hub-and-Spoke Model** powered by the Model Context Protocol (MCP):
+- **The Hub** — the Primary Agent (Enterprise Consolidation Orchestrator) acts as the MCP Client with write-access to the ledger
+- **The Spokes** — a Legal & Compliance Analyst and a Tax & Treasury Specialist are exposed as deterministic MCP tool endpoints that the orchestrator can consult for structured analysis
+
+The agent is graded not just on whether it reaches the correct final state, but on **how** it gets there — following the right evidence-gathering sequence, consulting the right specialists, and never hallucinating transaction IDs or exchange rates.
+
+## What Makes This Hard
+
+Unlike typical tool-use benchmarks, intercompany disputes require **multi-hop financial reasoning**:
+
+1. **Data is noisy** — invoices lack explicit intercompany IDs, amounts don't match due to FX timing, and text descriptions are unstructured
+2. **Shortcuts are penalized** — guessing an exchange rate instead of querying the Treasury API, or posting an adjustment without first fetching the contract, results in score penalties
+3. **Legal reasoning is required** — in the hardest task, the agent must interpret International Commercial Terms (CIF vs. FOB) from a shipping contract to determine which entity bears liability for damaged goods before touching the ledger
+4. **The goal is mathematical** — the ultimate target is a provably correct zero-balance elimination state across the consolidated ledger, not a subjective text answer
 
 ## Tasks
 
